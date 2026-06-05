@@ -40,7 +40,7 @@ import {
 import { getAlerts, getStations, getSystemAnalytics, polling } from './services/api';
 import type { Alert, PlatformUser, RangeKey, Role, Station } from './types';
 import { cardinalDirection, formatDateTime, getTrend, statusClass } from './utils/weather';
-import { users as sampleUsers } from './data/sampleData';
+import { stations as sampleStations, users as sampleUsers } from './data/sampleData';
 
 const navByRole: Record<Role, string[]> = {
   User: ['Overview', 'Live Weather', 'Analytics', 'Forecast', 'Stations', 'Map', 'Station Details', 'Alerts', 'About'],
@@ -217,7 +217,20 @@ function App() {
   }
 
   if (!activeStation) {
-    return <div className="min-h-screen bg-brand-fog p-8 text-brand-ink">Loading Team 3 Dashboard Model...</div>;
+    return (
+      <div className="min-h-screen bg-brand-fog p-8 text-brand-ink">
+        <p className="font-semibold">Loading Team 3 Dashboard Model...</p>
+        <button
+          onClick={() => {
+            setStations(sampleStations);
+            setActiveStationId(sampleStations[0].id);
+          }}
+          className="mt-4 rounded-md bg-brand-blue px-4 py-2 text-sm font-semibold text-white hover:bg-brand-sky"
+        >
+          Open demo dashboard
+        </button>
+      </div>
+    );
   }
 
   return (

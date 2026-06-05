@@ -231,6 +231,9 @@ async function getFirebaseStations(): Promise<Station[]> {
     firebaseRequest<FirebaseObject | FirebaseReading[] | null>(FIREBASE_READINGS_PATH).catch(() => null),
   ]);
   const stations = recordValues(stationPayload);
+  if (!stations.length) {
+    throw new Error('No Firebase stations found');
+  }
 
   return stations.map((row) => {
     const id = row.id ?? `station-${Date.now()}`;
