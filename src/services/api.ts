@@ -5,6 +5,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const JWT_TOKEN = import.meta.env.VITE_JWT_TOKEN as string | undefined;
 const FIREBASE_DATABASE_URL = import.meta.env.VITE_FIREBASE_DATABASE_URL as string | undefined;
 const FIREBASE_DATABASE_SECRET = import.meta.env.VITE_FIREBASE_DATABASE_SECRET as string | undefined;
+const FIREBASE_API_KEY = import.meta.env.VITE_FIREBASE_API_KEY as string | undefined;
+const FIREBASE_PROJECT_ID = import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined;
 const FIREBASE_STATIONS_PATH = (import.meta.env.VITE_FIREBASE_STATIONS_PATH as string | undefined) ?? 'stations';
 const FIREBASE_READINGS_PATH = (import.meta.env.VITE_FIREBASE_READINGS_PATH as string | undefined) ?? 'readings';
 const FIREBASE_ALERTS_PATH = (import.meta.env.VITE_FIREBASE_ALERTS_PATH as string | undefined) ?? 'alerts';
@@ -45,9 +47,13 @@ interface FirebaseObject {
 }
 
 interface FirebaseReading {
+  id?: string;
   timestamp?: string;
+  timestamps?: string | number | { seconds?: number; nanoseconds?: number; _seconds?: number; _nanoseconds?: number };
   created_at?: string;
   time?: string;
+  stationId?: string;
+  station_id?: string;
   altitude?: number | string;
   temperature?: number | string;
   humidity?: number | string;
@@ -117,6 +123,24 @@ interface FirebaseAlert {
   resolved?: boolean;
 }
 
+interface FirestoreValue {
+  stringValue?: string;
+  integerValue?: string;
+  doubleValue?: number;
+  booleanValue?: boolean;
+  timestampValue?: string;
+  nullValue?: null;
+  mapValue?: { fields?: Record<string, FirestoreValue> };
+  arrayValue?: { values?: FirestoreValue[] };
+}
+
+interface FirestoreDocument {
+  name: string;
+  fields?: Record<string, FirestoreValue>;
+  createTime?: string;
+  updateTime?: string;
+}
+
 async function request<T>(path: string): Promise<T> {
   if (!API_BASE_URL) {
     throw new Error('No API configured');
@@ -136,6 +160,18 @@ async function request<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function getFirebaseProjectId() {
+  if (FIREBASE_PROJECT_ID) return FIREBASE_PROJECT_ID;
+  if (!FIREBASE_DATABASE_URL) return undefined;
+
+  try {
+    const host = new URL(FIREBASE_DATABASE_URL).hostname;
+    return host.replace(/-default-rtdb\.firebaseio\.com$/, '').replace(/\.firebaseio\.com$/, '');
+  } catch {
+    return undefined;
+  }
+}
+
 async function firebaseRequest<T>(path: string): Promise<T> {
   if (!FIREBASE_DATABASE_URL) {
     throw new Error('No Firebase Realtime Database configured');
@@ -148,6 +184,23 @@ async function firebaseRequest<T>(path: string): Promise<T> {
 
   if (!response.ok) {
     throw new Error(`Firebase request failed: ${response.status}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+async function firestoreRequest<T>(path: string): Promise<T> {
+  const projectId = getFirebaseProjectId();
+  if (!projectId) {
+    throw new Error('No Firebase project configured');
+  }
+
+  const cleanPath = path.replace(/^\/|\/$/g, '');
+  const keyQuery = FIREBASE_API_KEY ? `?key=${encodeURIComponent(FIREBASE_API_KEY)}` : '';
+  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${cleanPath}${keyQuery}`);
+
+  if (!response.ok) {
+    throw new Error(`Firestore request failed: ${response.status}`);
   }
 
   return response.json() as Promise<T>;
@@ -220,10 +273,56 @@ function booleanFrom(value: unknown, fallback = false) {
   return fallback;
 }
 
+function timestampFrom(value: unknown, fallback: string) {
+  if (!value) return fallback;
+  if (typeof value === 'number') {
+    const milliseconds = value < 100000000000 ? value * 1000 : value;
+    return new Date(milliseconds).toISOString();
+  }
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
+  }
+  if (typeof value === 'object') {
+    const record = value as { seconds?: number; nanoseconds?: number; _seconds?: number; _nanoseconds?: number };
+    const seconds = record.seconds ?? record._seconds;
+    const nanoseconds = record.nanoseconds ?? record._nanoseconds ?? 0;
+    if (typeof seconds === 'number') {
+      return new Date(seconds * 1000 + Math.floor(nanoseconds / 1000000)).toISOString();
+    }
+  }
+  return fallback;
+}
+
 function recordValues<T>(value: Record<string, T> | T[] | null | undefined): Array<T & { id?: string }> {
   if (!value) return [];
   if (Array.isArray(value)) return value.map((item, index) => ({ ...item, id: String(index) }));
   return Object.entries(value).map(([id, item]) => ({ ...item, id }));
+}
+
+function firestoreValueToJson(value: FirestoreValue): FirebaseValue | undefined {
+  if ('stringValue' in value) return value.stringValue ?? '';
+  if ('integerValue' in value) return Number(value.integerValue ?? 0);
+  if ('doubleValue' in value) return value.doubleValue ?? 0;
+  if ('booleanValue' in value) return Boolean(value.booleanValue);
+  if ('timestampValue' in value) return value.timestampValue ?? '';
+  if ('nullValue' in value) return null;
+  if ('mapValue' in value) {
+    return Object.fromEntries(Object.entries(value.mapValue?.fields ?? {}).map(([key, nestedValue]) => [key, firestoreValueToJson(nestedValue) ?? null]));
+  }
+  if ('arrayValue' in value) return (value.arrayValue?.values ?? []).map((nestedValue) => firestoreValueToJson(nestedValue) ?? null);
+  return undefined;
+}
+
+function mapFirestoreDocument(document: FirestoreDocument): FirebaseReading {
+  const fields = Object.fromEntries(Object.entries(document.fields ?? {}).map(([key, value]) => [key, firestoreValueToJson(value)])) as FirebaseReading;
+  const id = document.name.split('/').pop() ?? fields.id;
+  return {
+    ...fields,
+    id,
+    timestamp: fields.timestamp ?? document.createTime,
+    timestamps: fields.timestamps ?? fields.timestamp ?? document.createTime,
+  };
 }
 
 function isSingleFirebaseStation(value: unknown): value is FirebaseStation {
@@ -232,8 +331,8 @@ function isSingleFirebaseStation(value: unknown): value is FirebaseStation {
   return ['temperature', 'humidity', 'pressure', 'rain', 'rainfall', 'wind_direction', 'wind_direction_pct', 'altitude'].some((key) => key in record);
 }
 
-function mapFirebaseReading(reading: FirebaseReading): Reading {
-  const timestamp = reading.timestamp ?? reading.created_at ?? reading.time ?? new Date().toISOString();
+function mapFirebaseReading(reading: FirebaseReading, fallbackTimestamp = new Date().toISOString()): Reading {
+  const timestamp = timestampFrom(reading.timestamps ?? reading.timestamp ?? reading.created_at ?? reading.time, fallbackTimestamp);
   const rain = booleanFrom(reading.rain, numberFrom(reading.rainfall) > 0);
   const light = booleanFrom(reading.light, numberFrom(reading.irradiance) > 0);
   const windDirectionValue = reading.windDirection ?? reading.wind_direction;
@@ -260,20 +359,29 @@ function sortReadings(readings: Reading[]) {
   return readings.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 }
 
+function mapFirebaseReadings(readings: FirebaseReading[]) {
+  const now = Date.now();
+  return sortReadings(
+    readings.map((reading, index) => {
+      const fallbackTimestamp = new Date(now - (readings.length - index - 1) * 5 * 60 * 1000).toISOString();
+      return mapFirebaseReading(reading, fallbackTimestamp);
+    }),
+  );
+}
+
 function readingsForStation(stationId: string, station: FirebaseStation, allReadings: FirebaseObject | FirebaseReading[] | null) {
   const stationReadings = station.history ?? station.readings;
-  if (stationReadings) return sortReadings(recordValues(stationReadings).map(mapFirebaseReading));
+  if (stationReadings) return mapFirebaseReadings(recordValues(stationReadings));
 
   if (Array.isArray(allReadings)) {
-    return sortReadings(
+    return mapFirebaseReadings(
       allReadings
-        .filter((reading) => (reading as FirebaseReading & { stationId?: string; station_id?: string }).stationId === stationId || (reading as FirebaseReading & { stationId?: string; station_id?: string }).station_id === stationId)
-        .map(mapFirebaseReading),
+        .filter((reading) => reading.stationId === stationId || reading.station_id === stationId),
     );
   }
 
   const stationBucket = allReadings?.[stationId] as Record<string, FirebaseReading> | FirebaseReading[] | undefined;
-  return sortReadings(recordValues(stationBucket).map(mapFirebaseReading));
+  return mapFirebaseReadings(recordValues(stationBucket));
 }
 
 function normalizeCommunication(value: unknown, status: StationStatus): Station['communication'] {
@@ -281,7 +389,51 @@ function normalizeCommunication(value: unknown, status: StationStatus): Station[
   return status === 'offline' ? 'lost' : status === 'warning' ? 'degraded' : 'stable';
 }
 
+async function getFirestoreReadings(): Promise<FirebaseReading[]> {
+  const payload = await firestoreRequest<{ documents?: FirestoreDocument[] }>(FIREBASE_READINGS_PATH);
+  return (payload.documents ?? []).map(mapFirestoreDocument);
+}
+
+async function getFirestoreStations(): Promise<Station[]> {
+  const readings = await getFirestoreReadings();
+  if (!readings.length) {
+    throw new Error('No Firestore readings found');
+  }
+
+  const stationIds = Array.from(new Set(readings.map((reading) => reading.station_id ?? reading.stationId ?? 'esp32-O1')));
+  return stationIds.map((id, index) => {
+    const fallback = sampleStations[index] ?? sampleStations[0];
+    const history = mapFirebaseReadings(readings.filter((reading) => reading.station_id === id || reading.stationId === id || (!reading.station_id && !reading.stationId && id === 'esp32-O1')));
+    const current = history[history.length - 1] ?? fallback.current;
+
+    return {
+      id,
+      name: id,
+      location: fallback.location,
+      coordinates: fallback.coordinates,
+      installationDate: fallback.installationDate,
+      status: 'online',
+      battery: fallback.battery,
+      signal: fallback.signal,
+      memory: fallback.memory,
+      communication: 'stable',
+      owner: fallback.owner,
+      lastCommunication: current.timestamp,
+      lastMaintenance: fallback.lastMaintenance,
+      lastUpload: current.timestamp,
+      current,
+      history,
+    };
+  });
+}
+
 async function getFirebaseStations(): Promise<Station[]> {
+  try {
+    return await getFirestoreStations();
+  } catch {
+    // Continue to Realtime Database fallback below.
+  }
+
   const [stationPayload, readingPayload] = await Promise.all([
     firebaseRequest<Record<string, FirebaseStation> | FirebaseStation[] | FirebaseStation>(FIREBASE_STATIONS_PATH),
     firebaseRequest<FirebaseObject | FirebaseReading[] | null>(FIREBASE_READINGS_PATH).catch(() => null),
@@ -378,10 +530,18 @@ export async function getStations(): Promise<Station[]> {
 export async function getStationHistory(stationId: string, range: RangeKey) {
   const limit = range === '24h' ? 24 : range === '7d' ? 168 : 500;
   try {
+    const readings = await getFirestoreReadings();
+    const history = mapFirebaseReadings(readings.filter((reading) => reading.station_id === stationId || reading.stationId === stationId));
+    if (history.length) return history.slice(-limit);
+  } catch {
+    // Continue to Realtime Database fallback below.
+  }
+
+  try {
     const station = await firebaseRequest<FirebaseStation>(`${FIREBASE_STATIONS_PATH}/${stationId}`).catch(() => null);
     const readings = await firebaseRequest<FirebaseObject | FirebaseReading[] | null>(`${FIREBASE_READINGS_PATH}/${stationId}`).catch(() => null);
     const stationReadings = readings as Record<string, FirebaseReading> | FirebaseReading[] | null;
-    const history = station ? readingsForStation(stationId, station, readings) : sortReadings(recordValues(stationReadings).map(mapFirebaseReading));
+    const history = station ? readingsForStation(stationId, station, readings) : mapFirebaseReadings(recordValues(stationReadings));
     if (history.length) return history.slice(-limit);
   } catch {
     // Continue to Supabase/FastAPI/sample fallback below.
