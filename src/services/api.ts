@@ -25,12 +25,16 @@ interface SupabaseStationRow {
 interface SupabaseReadingRow {
   id: number;
   station_id: string;
+  altitude: number | null;
   temperature: number | null;
   humidity: number | null;
   pressure: number | null;
+  rain: boolean | number | string | null;
   rainfall: number | null;
+  light: boolean | number | string | null;
   wind_speed: number | null;
   wind_direction: number | null;
+  wind_direction_pct: number | null;
   irradiance: number | null;
   created_at: string;
 }
@@ -44,6 +48,7 @@ interface FirebaseReading {
   timestamp?: string;
   created_at?: string;
   time?: string;
+  altitude?: number | string;
   temperature?: number | string;
   humidity?: number | string;
   pressure?: number | string;
@@ -174,14 +179,21 @@ function normalizeStatus(status: string | null): StationStatus {
 }
 
 function mapReading(row: SupabaseReadingRow): Reading {
+  const rainfall = Number(row.rainfall ?? 0);
+  const windDirection = Number(row.wind_direction ?? row.wind_direction_pct ?? 0);
   return {
     timestamp: row.created_at,
+    altitude: Number(row.altitude ?? 0),
     temperature: Number(row.temperature ?? 0),
     humidity: Number(row.humidity ?? 0),
     pressure: Number(row.pressure ?? 0),
-    rainfall: Number(row.rainfall ?? 0),
+    rain: booleanFrom(row.rain, rainfall > 0),
+    rainfall,
+    light: booleanFrom(row.light, Number(row.irradiance ?? 0) > 0),
     windSpeed: Number(row.wind_speed ?? 0),
-    windDirection: Number(row.wind_direction ?? 0),
+    windDirection,
+    windDirectionLabel: '---',
+    windDirectionPct: Number(row.wind_direction_pct ?? windDirection),
     irradiance: Number(row.irradiance ?? 0),
   };
 }
@@ -193,6 +205,19 @@ function fallbackStationDetails(id: string) {
 function numberFrom(value: unknown, fallback = 0) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function booleanFrom(value: unknown, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value > 0;
+  if (typeof value === 'string') {
+    const cleanValue = value.trim().toLowerCase();
+    if (cleanValue === 'true') return true;
+    if (cleanValue === 'false') return false;
+    const numberValue = Number(cleanValue);
+    if (Number.isFinite(numberValue)) return numberValue > 0;
+  }
+  return fallback;
 }
 
 function recordValues<T>(value: Record<string, T> | T[] | null | undefined): Array<T & { id?: string }> {
@@ -209,15 +234,25 @@ function isSingleFirebaseStation(value: unknown): value is FirebaseStation {
 
 function mapFirebaseReading(reading: FirebaseReading): Reading {
   const timestamp = reading.timestamp ?? reading.created_at ?? reading.time ?? new Date().toISOString();
+  const rain = booleanFrom(reading.rain, numberFrom(reading.rainfall) > 0);
+  const light = booleanFrom(reading.light, numberFrom(reading.irradiance) > 0);
+  const windDirectionValue = reading.windDirection ?? reading.wind_direction;
+  const windDirection = numberFrom(windDirectionValue ?? reading.wind_direction_pct);
+  const windDirectionLabel = typeof windDirectionValue === 'string' && !Number.isFinite(Number(windDirectionValue)) ? windDirectionValue : '---';
   return {
     timestamp,
+    altitude: numberFrom(reading.altitude),
     temperature: numberFrom(reading.temperature),
     humidity: numberFrom(reading.humidity),
     pressure: numberFrom(reading.pressure),
-    rainfall: typeof reading.rain === 'boolean' ? (reading.rain ? 1 : 0) : numberFrom(reading.rainfall ?? reading.rain),
+    rain,
+    rainfall: rain ? numberFrom(reading.rainfall, 1) : 0,
+    light,
     windSpeed: numberFrom(reading.windSpeed ?? reading.wind_speed),
-    windDirection: numberFrom(reading.windDirection ?? reading.wind_direction ?? reading.wind_direction_pct),
-    irradiance: typeof reading.light === 'boolean' ? (reading.light ? 1000 : 0) : numberFrom(reading.irradiance),
+    windDirection,
+    windDirectionLabel,
+    windDirectionPct: numberFrom(reading.wind_direction_pct, windDirection),
+    irradiance: light ? numberFrom(reading.irradiance, 1000) : 0,
   };
 }
 
@@ -261,7 +296,7 @@ async function getFirebaseStations(): Promise<Station[]> {
     const fallback = fallbackStationDetails(id);
     const history = readingsForStation(id, row, readingPayload);
     const directReading = mapFirebaseReading(row);
-    const current = row.current ? mapFirebaseReading(row.current) : history[history.length - 1] ?? directReading ?? fallback.current;
+    const current = row.current ? mapFirebaseReading({ ...row, ...row.current }) : history[history.length - 1] ?? directReading ?? fallback.current;
     const status = normalizeStatus(row.status ?? null);
     const latitude = numberFrom(row.latitude ?? row.lat, fallback.coordinates[0]);
     const longitude = numberFrom(row.longitude ?? row.lng, fallback.coordinates[1]);

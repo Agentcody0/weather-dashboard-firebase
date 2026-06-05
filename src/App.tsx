@@ -39,7 +39,7 @@ import {
 } from 'recharts';
 import { getAlerts, getStations, getSystemAnalytics, polling } from './services/api';
 import type { Alert, PlatformUser, RangeKey, Role, Station } from './types';
-import { cardinalDirection, formatDateTime, getTrend, statusClass } from './utils/weather';
+import { formatDateTime, getTrend, statusClass } from './utils/weather';
 import { stations as sampleStations, users as sampleUsers } from './data/sampleData';
 
 const navByRole: Record<Role, string[]> = {
@@ -208,6 +208,8 @@ function App() {
     const size = range === '24h' ? 24 : range === '7d' ? 32 : range === '30d' ? 36 : 18;
     return history.slice(-size).map((reading) => ({
       ...reading,
+      rainValue: reading.rain ? 1 : 0,
+      lightValue: reading.light ? 1 : 0,
       time: new Intl.DateTimeFormat('en-IN', { hour: '2-digit', minute: '2-digit' }).format(new Date(reading.timestamp)),
     }));
   }, [activeStation, range]);
@@ -262,15 +264,15 @@ function App() {
 
         <section className="min-w-0">
           <RoleBanner role={role} />
-          <Toolbar station={activeStation} stations={stations} onStationChange={setActiveStationId} />
-          {page === 'Overview' && <Overview station={activeStation} alerts={alerts} stations={stations} />}
-          {page === 'Live Weather' && <LiveWeather station={activeStation} />}
+          <Toolbar station={activeStation} stations={stations} onStationChange={setActiveStationId} role={role} />
+          {page === 'Overview' && <Overview station={activeStation} alerts={alerts} stations={stations} role={role} />}
+          {page === 'Live Weather' && <LiveWeather station={activeStation} role={role} />}
           {page === 'Analytics' && <Analytics station={activeStation} chartData={chartData} range={range} setRange={setRange} />}
           {page === 'Forecast' && <Forecast station={activeStation} />}
-          {page === 'Stations' && <StationMonitoring stations={stations} activeStationId={activeStation.id} setActiveStationId={setActiveStationId} />}
-          {page === 'Map' && <MapView stations={stations} setActiveStationId={setActiveStationId} />}
-          {page === 'Station Details' && <StationDetails station={activeStation} chartData={chartData} />}
-          {page === 'Alerts' && <Alerts alerts={alerts} stations={stations} />}
+          {page === 'Stations' && <StationMonitoring stations={stations} activeStationId={activeStation.id} setActiveStationId={setActiveStationId} role={role} />}
+          {page === 'Map' && <MapView stations={stations} setActiveStationId={setActiveStationId} role={role} />}
+          {page === 'Station Details' && <StationDetails station={activeStation} chartData={chartData} role={role} />}
+          {page === 'Alerts' && <Alerts alerts={alerts} stations={stations} role={role} />}
           {page === 'Control' && <ControlPanel station={activeStation} onRefresh={() => setManualRefreshKey((value) => value + 1)} />}
           {page === 'Health' && <Health station={activeStation} />}
           {page === 'Diagnostics' && <Diagnostics station={activeStation} />}
@@ -452,7 +454,7 @@ function RoleBanner({ role }: { role: Role }) {
   );
 }
 
-function Toolbar({ station, stations, onStationChange }: { station: Station; stations: Station[]; onStationChange: (id: string) => void }) {
+function Toolbar({ station, stations, onStationChange, role }: { station: Station; stations: Station[]; onStationChange: (id: string) => void; role: Role }) {
   return (
     <div className="mb-5 flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-panel dark:border-slate-800 dark:bg-slate-900 md:flex-row md:items-center">
       <div>
@@ -468,22 +470,41 @@ function Toolbar({ station, stations, onStationChange }: { station: Station; sta
             </option>
           ))}
         </select>
-        <span className="rounded-md bg-slate-100 px-3 py-2 text-sm dark:bg-slate-800">Updated {formatDateTime(station.lastUpload)}</span>
+        {role !== 'User' && <span className="rounded-md bg-slate-100 px-3 py-2 text-sm dark:bg-slate-800">Updated {formatDateTime(station.lastUpload)}</span>}
       </div>
     </div>
   );
 }
 
-function Overview({ station, alerts, stations }: { station: Station; alerts: Alert[]; stations: Station[] }) {
+function modelReadingRows(reading: Station['current']) {
+  return [
+    ['altitude', reading.altitude],
+    ['humidity', reading.humidity],
+    ['light', String(reading.light)],
+    ['pressure', reading.pressure],
+    ['rain', String(reading.rain)],
+    ['temperature', reading.temperature],
+    ['wind_direction', reading.windDirectionLabel],
+    ['wind_direction_pct', reading.windDirectionPct],
+  ] as const;
+}
+
+function visibleAlertsForRole(alerts: Alert[], role: Role) {
+  return role === 'User' ? alerts.filter((alert) => alert.type === 'weather' || alert.type === 'sensor') : alerts;
+}
+
+function Overview({ station, alerts, stations, role }: { station: Station; alerts: Alert[]; stations: Station[]; role: Role }) {
   const reading = station.current;
+  const visibleAlerts = visibleAlertsForRole(alerts, role);
   const cards = [
-    ['Temperature', `${reading.temperature}°C`, ThermometerSun, 'Feels optimal'],
-    ['Humidity', `${reading.humidity}%`, CloudSun, 'Canopy moisture'],
-    ['Pressure', `${reading.pressure} hPa`, Gauge, 'Stable air mass'],
-    ['Rainfall', `${reading.rainfall} mm`, BarChart3, 'Last interval'],
-    ['Wind Speed', `${reading.windSpeed} m/s`, Wind, 'Surface wind'],
-    ['Wind Direction', `${cardinalDirection(reading.windDirection)} ${reading.windDirection}°`, Compass, 'Cardinal bearing'],
-    ['Irradiance', `${reading.irradiance} W/m²`, Sun, 'Solar input'],
+    ['altitude', reading.altitude, Compass, 'Model output'],
+    ['humidity', reading.humidity, CloudSun, 'Model output'],
+    ['light', String(reading.light), Sun, 'Model output'],
+    ['pressure', reading.pressure, Gauge, 'Model output'],
+    ['rain', String(reading.rain), BarChart3, 'Model output'],
+    ['temperature', reading.temperature, ThermometerSun, 'Model output'],
+    ['wind_direction', reading.windDirectionLabel, Wind, 'Model output'],
+    ['wind_direction_pct', reading.windDirectionPct, Compass, 'Model output'],
   ] as const;
 
   return (
@@ -498,16 +519,16 @@ function Overview({ station, alerts, stations }: { station: Station; alerts: Ale
           <div className="grid gap-3 md:grid-cols-3">
             <Summary label="Total stations" value={stations.length} />
             <Summary label="Online" value={stations.filter((item) => item.status === 'online').length} />
-            <Summary label="Active alerts" value={alerts.filter((alert) => !alert.resolved).length} />
+            <Summary label="Active alerts" value={visibleAlerts.filter((alert) => !alert.resolved).length} />
           </div>
         </Panel>
-        <AlertList alerts={alerts.slice(0, 3)} stations={stations} compact />
+        <AlertList alerts={visibleAlerts.slice(0, 3)} stations={stations} compact />
       </div>
     </div>
   );
 }
 
-function MetricCard({ label, value, caption, Icon }: { label: string; value: string; caption: string; Icon: typeof Home }) {
+function MetricCard({ label, value, caption, Icon }: { label: string; value: string | number; caption: string; Icon: typeof Home }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-panel transition hover:-translate-y-0.5 dark:border-slate-800 dark:bg-slate-900">
       <div className="mb-4 flex items-center justify-between">
@@ -522,20 +543,12 @@ function MetricCard({ label, value, caption, Icon }: { label: string; value: str
   );
 }
 
-function LiveWeather({ station }: { station: Station }) {
+function LiveWeather({ station, role }: { station: Station; role: Role }) {
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
       <Panel title="Real-Time Sensor Stream">
         <div className="grid gap-4 sm:grid-cols-2">
-          {Object.entries({
-            Temperature: `${station.current.temperature}°C`,
-            Humidity: `${station.current.humidity}%`,
-            Pressure: `${station.current.pressure} hPa`,
-            Rainfall: `${station.current.rainfall} mm`,
-            'Wind Speed': `${station.current.windSpeed} m/s`,
-            'Wind Direction': `${cardinalDirection(station.current.windDirection)} ${station.current.windDirection}°`,
-            Irradiance: `${station.current.irradiance} W/m²`,
-          }).map(([label, value]) => (
+          {modelReadingRows(station.current).map(([label, value]) => (
             <div key={label} className="flex items-center justify-between rounded-md bg-slate-100 px-4 py-3 dark:bg-slate-800">
               <span className="text-sm text-slate-500 dark:text-slate-400">{label}</span>
               <strong>{value}</strong>
@@ -545,9 +558,13 @@ function LiveWeather({ station }: { station: Station }) {
       </Panel>
       <Panel title="Station Link">
         <StatusRow label="Station status" value={station.status} />
-        <StatusRow label="Battery status" value={`${station.battery}%`} />
-        <StatusRow label="Communication" value={station.communication} />
-        <StatusRow label="Last update" value={formatDateTime(station.lastUpload)} />
+        {role !== 'User' && (
+          <>
+            <StatusRow label="Battery status" value={`${station.battery}%`} />
+            <StatusRow label="Communication" value={station.communication} />
+            <StatusRow label="Last update" value={formatDateTime(station.lastUpload)} />
+          </>
+        )}
       </Panel>
     </div>
   );
@@ -565,12 +582,13 @@ function Analytics({ chartData, range, setRange }: { station: Station; chartData
         ))}
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
+        <ChartPanel title="Altitude Trend" data={chartData} dataKey="altitude" color="#475569" unit="" />
         <ChartPanel title="Temperature Trend" data={chartData} dataKey="temperature" color="#0b79b7" unit="°C" />
         <ChartPanel title="Humidity Trend" data={chartData} dataKey="humidity" color="#1fb879" unit="%" />
-        <ChartPanel title="Pressure Trend" data={chartData} dataKey="pressure" color="#64748b" unit="hPa" />
-        <BarPanel title="Rainfall Trend" data={chartData} dataKey="rainfall" color="#00598c" unit="mm" />
-        <ChartPanel title="Wind Speed Trend" data={chartData} dataKey="windSpeed" color="#14b8a6" unit="m/s" />
-        <ChartPanel title="Irradiance Trend" data={chartData} dataKey="irradiance" color="#f59e0b" unit="W/m²" />
+        <ChartPanel title="Pressure Trend" data={chartData} dataKey="pressure" color="#64748b" unit="" />
+        <BarPanel title="Rain State" data={chartData} dataKey="rainValue" color="#00598c" unit="state" />
+        <BarPanel title="Light State" data={chartData} dataKey="lightValue" color="#f59e0b" unit="state" />
+        <ChartPanel title="Wind Direction %" data={chartData} dataKey="windDirectionPct" color="#14b8a6" unit="" />
       </div>
     </div>
   );
@@ -579,21 +597,21 @@ function Analytics({ chartData, range, setRange }: { station: Station; chartData
 function Forecast({ station }: { station: Station }) {
   const trends = [
     ['Temperature', getTrend(station.history, 'temperature')],
-    ['Rain probability', getTrend(station.history, 'rainfall') === 'rising' ? 'increasing' : 'stable'],
-    ['Wind speed', getTrend(station.history, 'windSpeed')],
-    ['Solar irradiance', getTrend(station.history, 'irradiance')],
+    ['Humidity', getTrend(station.history, 'humidity')],
+    ['Pressure', getTrend(station.history, 'pressure')],
+    ['Wind direction %', getTrend(station.history, 'windDirectionPct')],
   ];
 
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
       <Panel title="Current Conditions">
         <div className="grid gap-4 sm:grid-cols-3">
-          <Summary label="Air temperature" value={`${station.current.temperature}°C`} />
-          <Summary label="Rainfall" value={`${station.current.rainfall} mm`} />
-          <Summary label="Wind" value={`${station.current.windSpeed} m/s`} />
+          <Summary label="temperature" value={station.current.temperature} />
+          <Summary label="rain" value={String(station.current.rain)} />
+          <Summary label="light" value={String(station.current.light)} />
         </div>
         <p className="mt-5 rounded-md bg-brand-fog p-4 text-sm leading-6 text-brand-ink dark:bg-slate-800 dark:text-slate-100">
-          Short-term local prediction: light cloud movement with a two-hour temperature drift near {Math.round(station.current.temperature + 1)}°C and localized rain risk around {station.current.rainfall > 1 ? 'moderate' : 'low'}.
+          Short-term local prediction uses the basic model output only: rain is currently {String(station.current.rain)}, light is currently {String(station.current.light)}, and temperature is near {station.current.temperature}.
         </p>
       </Panel>
       <Panel title="Trend Indicators">
@@ -610,7 +628,7 @@ function Forecast({ station }: { station: Station }) {
   );
 }
 
-function StationMonitoring({ stations, activeStationId, setActiveStationId }: { stations: Station[]; activeStationId: string; setActiveStationId: (id: string) => void }) {
+function StationMonitoring({ stations, activeStationId, setActiveStationId, role = 'Admin' }: { stations: Station[]; activeStationId: string; setActiveStationId: (id: string) => void; role?: Role }) {
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {stations.map((station) => (
@@ -622,18 +640,27 @@ function StationMonitoring({ stations, activeStationId, setActiveStationId }: { 
             </div>
             <StatusPill status={station.status} />
           </div>
-          <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-            <Summary label="Battery" value={`${station.battery}%`} />
-            <Summary label="Signal" value={`${station.signal}%`} />
-            <Summary label="Wind" value={`${station.current.windSpeed} m/s`} />
-          </div>
+          {role === 'User' ? (
+            <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+              <Summary label="temperature" value={station.current.temperature} />
+              <Summary label="rain" value={String(station.current.rain)} />
+              <Summary label="humidity" value={station.current.humidity} />
+              <Summary label="light" value={String(station.current.light)} />
+            </div>
+          ) : (
+            <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+              <Summary label="Battery" value={`${station.battery}%`} />
+              <Summary label="Signal" value={`${station.signal}%`} />
+              <Summary label="Wind" value={`${station.current.windSpeed} m/s`} />
+            </div>
+          )}
         </button>
       ))}
     </div>
   );
 }
 
-function MapView({ stations, setActiveStationId }: { stations: Station[]; setActiveStationId: (id: string) => void }) {
+function MapView({ stations, setActiveStationId, role }: { stations: Station[]; setActiveStationId: (id: string) => void; role: Role }) {
   const center: [number, number] = stations[0]?.coordinates ?? [17.385, 78.4867];
 
   return (
@@ -661,9 +688,13 @@ function MapView({ stations, setActiveStationId }: { stations: Station[]; setAct
                 <br />
                 {station.location}
                 <br />
-                {station.current.temperature}°C, {station.current.humidity}% RH
-                <br />
-                Last comm: {formatDateTime(station.lastCommunication)}
+                temperature: {station.current.temperature}, humidity: {station.current.humidity}, rain: {String(station.current.rain)}
+                {role !== 'User' && (
+                  <>
+                    <br />
+                    Last comm: {formatDateTime(station.lastCommunication)}
+                  </>
+                )}
               </Popup>
             </Marker>
           ))}
@@ -673,22 +704,32 @@ function MapView({ stations, setActiveStationId }: { stations: Station[]; setAct
   );
 }
 
-function StationDetails({ station, chartData }: { station: Station; chartData: Station['history'] }) {
+function StationDetails({ station, chartData, role }: { station: Station; chartData: Station['history']; role: Role }) {
   return (
     <div className="grid gap-5">
       <Panel title={station.name}>
-        <div className="grid gap-4 md:grid-cols-4">
-          <Summary label="Location" value={station.location} />
-          <Summary label="Installed" value={station.installationDate} />
-          <Summary label="Battery" value={`${station.battery}%`} />
-          <Summary label="Connectivity" value={station.communication} />
-          <Summary label="Last maintenance" value={station.lastMaintenance} />
-          <Summary label="Last upload" value={formatDateTime(station.lastUpload)} />
-          <Summary label="Owner" value={station.owner} />
-          <Summary label="Status" value={station.status} />
-        </div>
+        {role === 'User' ? (
+          <div className="grid gap-4 md:grid-cols-4">
+            <Summary label="Location" value={station.location} />
+            <Summary label="Status" value={station.status} />
+            {modelReadingRows(station.current).map(([label, value]) => (
+              <Summary key={label} label={label} value={value} />
+            ))}
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-4">
+            <Summary label="Location" value={station.location} />
+            <Summary label="Installed" value={station.installationDate} />
+            <Summary label="Battery" value={`${station.battery}%`} />
+            <Summary label="Connectivity" value={station.communication} />
+            <Summary label="Last maintenance" value={station.lastMaintenance} />
+            <Summary label="Last upload" value={formatDateTime(station.lastUpload)} />
+            <Summary label="Owner" value={station.owner} />
+            <Summary label="Status" value={station.status} />
+          </div>
+        )}
       </Panel>
-      <ChartPanel title="Station Historical Temperature" data={chartData} dataKey="temperature" color="#00598c" unit="°C" />
+      <ChartPanel title="Station Historical Temperature" data={chartData} dataKey="temperature" color="#00598c" unit="" />
     </div>
   );
 }
@@ -786,8 +827,8 @@ function Maintenance({ station }: { station: Station }) {
   );
 }
 
-function Alerts({ alerts, stations }: { alerts: Alert[]; stations: Station[] }) {
-  return <AlertList alerts={alerts} stations={stations} />;
+function Alerts({ alerts, stations, role }: { alerts: Alert[]; stations: Station[]; role: Role }) {
+  return <AlertList alerts={visibleAlertsForRole(alerts, role)} stations={stations} />;
 }
 
 function UserManagement({ users, setUsers }: { users: PlatformUser[]; setUsers: (users: PlatformUser[] | ((current: PlatformUser[]) => PlatformUser[])) => void }) {

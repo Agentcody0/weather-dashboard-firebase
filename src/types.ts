@@ -4,12 +4,17 @@ export type RangeKey = '24h' | '7d' | '30d' | 'custom';
 
 export interface Reading {
   timestamp: string;
+  altitude: number;
   temperature: number;
   humidity: number;
   pressure: number;
+  rain: boolean;
   rainfall: number;
+  light: boolean;
   windSpeed: number;
   windDirection: number;
+  windDirectionLabel: string;
+  windDirectionPct: number;
   irradiance: number;
 }
 

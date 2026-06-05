@@ -13,12 +13,17 @@ function makeHistory(seed: number): Reading[] {
 
     return {
       timestamp: t.toISOString(),
+      altitude: Number((924.2 + seed * 2 + Math.cos(index / 6) * 0.6).toFixed(5)),
       temperature: Number((25 + seed + wave * 4 + index * 0.03).toFixed(1)),
       humidity: Math.round(62 + wave * 12 + seed * 2),
       pressure: Number((1008 + seed * 1.5 + Math.cos(index / 5) * 4).toFixed(1)),
+      rain: rainBurst > 0,
       rainfall: Number(rainBurst.toFixed(1)),
+      light: hoursBack < 20,
       windSpeed: Number((3.5 + seed * 0.5 + Math.abs(Math.cos(index / 3)) * 2.2).toFixed(1)),
       windDirection: windDirections[(index + seed) % windDirections.length],
+      windDirectionLabel: '---',
+      windDirectionPct: windDirections[(index + seed) % windDirections.length],
       irradiance: Math.max(0, Math.round(760 + Math.sin(index / 5) * 230 - (hoursBack > 20 ? 500 : 0))),
     };
   });
