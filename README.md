@@ -44,8 +44,8 @@ VITE_FIREBASE_READINGS_PATH=readings
 VITE_FIREBASE_ALERTS_PATH=alerts
 VITE_API_BASE_URL=https://your-fastapi-domain.com
 VITE_JWT_TOKEN=your-jwt-token
-VITE_FAST_POLL_MS=300000
-VITE_SLOW_POLL_MS=1200000
+VITE_FAST_POLL_MS=5000
+VITE_SLOW_POLL_MS=300000
 ```
 
 The dashboard reads Firebase Realtime Database data first, then falls back to Supabase/FastAPI/sample data if Firebase is not configured or a request fails.
@@ -68,4 +68,4 @@ The dashboard can also use these optional API endpoints:
 - `GET /alerts`
 - `GET /system/analytics`
 
-If no Firebase or API base URL is provided, the app uses bundled sample data. Fast polling defaults to 5 minutes and slow polling defaults to 20 minutes.
+If no Firebase or API base URL is provided, the app uses bundled sample data. Fast polling defaults to 5 seconds and slow polling defaults to 5 minutes.
