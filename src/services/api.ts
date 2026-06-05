@@ -48,11 +48,13 @@ interface FirebaseReading {
   humidity?: number | string;
   pressure?: number | string;
   rainfall?: number | string;
-  rain?: number | string;
+  rain?: number | string | boolean;
+  light?: boolean;
   windSpeed?: number | string;
   wind_speed?: number | string;
   windDirection?: number | string;
   wind_direction?: number | string;
+  wind_direction_pct?: number | string;
   irradiance?: number | string;
 }
 
@@ -64,6 +66,19 @@ interface FirebaseStation {
   longitude?: number | string;
   lat?: number | string;
   lng?: number | string;
+  altitude?: number | string;
+  temperature?: number | string;
+  humidity?: number | string;
+  pressure?: number | string;
+  rainfall?: number | string;
+  rain?: number | string | boolean;
+  light?: boolean;
+  windSpeed?: number | string;
+  wind_speed?: number | string;
+  windDirection?: number | string;
+  wind_direction?: number | string;
+  wind_direction_pct?: number | string;
+  irradiance?: number | string;
   coordinates?: [number, number];
   installationDate?: string;
   installedDate?: string;
@@ -186,6 +201,12 @@ function recordValues<T>(value: Record<string, T> | T[] | null | undefined): Arr
   return Object.entries(value).map(([id, item]) => ({ ...item, id }));
 }
 
+function isSingleFirebaseStation(value: unknown): value is FirebaseStation {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return ['temperature', 'humidity', 'pressure', 'rain', 'rainfall', 'wind_direction', 'wind_direction_pct', 'altitude'].some((key) => key in record);
+}
+
 function mapFirebaseReading(reading: FirebaseReading): Reading {
   const timestamp = reading.timestamp ?? reading.created_at ?? reading.time ?? new Date().toISOString();
   return {
@@ -193,10 +214,10 @@ function mapFirebaseReading(reading: FirebaseReading): Reading {
     temperature: numberFrom(reading.temperature),
     humidity: numberFrom(reading.humidity),
     pressure: numberFrom(reading.pressure),
-    rainfall: numberFrom(reading.rainfall ?? reading.rain),
+    rainfall: typeof reading.rain === 'boolean' ? (reading.rain ? 1 : 0) : numberFrom(reading.rainfall ?? reading.rain),
     windSpeed: numberFrom(reading.windSpeed ?? reading.wind_speed),
-    windDirection: numberFrom(reading.windDirection ?? reading.wind_direction),
-    irradiance: numberFrom(reading.irradiance),
+    windDirection: numberFrom(reading.windDirection ?? reading.wind_direction ?? reading.wind_direction_pct),
+    irradiance: typeof reading.light === 'boolean' ? (reading.light ? 1000 : 0) : numberFrom(reading.irradiance),
   };
 }
 
@@ -227,10 +248,10 @@ function normalizeCommunication(value: unknown, status: StationStatus): Station[
 
 async function getFirebaseStations(): Promise<Station[]> {
   const [stationPayload, readingPayload] = await Promise.all([
-    firebaseRequest<Record<string, FirebaseStation> | FirebaseStation[]>(FIREBASE_STATIONS_PATH),
+    firebaseRequest<Record<string, FirebaseStation> | FirebaseStation[] | FirebaseStation>(FIREBASE_STATIONS_PATH),
     firebaseRequest<FirebaseObject | FirebaseReading[] | null>(FIREBASE_READINGS_PATH).catch(() => null),
   ]);
-  const stations = recordValues(stationPayload);
+  const stations = isSingleFirebaseStation(stationPayload) ? [{ ...stationPayload, id: stationPayload.id ?? 'weather-station' }] : recordValues(stationPayload);
   if (!stations.length) {
     throw new Error('No Firebase stations found');
   }
@@ -239,7 +260,8 @@ async function getFirebaseStations(): Promise<Station[]> {
     const id = row.id ?? `station-${Date.now()}`;
     const fallback = fallbackStationDetails(id);
     const history = readingsForStation(id, row, readingPayload);
-    const current = row.current ? mapFirebaseReading(row.current) : history[history.length - 1] ?? fallback.current;
+    const directReading = mapFirebaseReading(row);
+    const current = row.current ? mapFirebaseReading(row.current) : history[history.length - 1] ?? directReading ?? fallback.current;
     const status = normalizeStatus(row.status ?? null);
     const latitude = numberFrom(row.latitude ?? row.lat, fallback.coordinates[0]);
     const longitude = numberFrom(row.longitude ?? row.lng, fallback.coordinates[1]);
