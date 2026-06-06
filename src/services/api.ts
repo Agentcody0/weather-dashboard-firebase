@@ -8,6 +8,7 @@ const FIREBASE_DATABASE_SECRET = import.meta.env.VITE_FIREBASE_DATABASE_SECRET a
 const FIREBASE_API_KEY = import.meta.env.VITE_FIREBASE_API_KEY as string | undefined;
 const FIREBASE_PROJECT_ID = import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined;
 const FIREBASE_STATIONS_PATH = (import.meta.env.VITE_FIREBASE_STATIONS_PATH as string | undefined) ?? 'stations';
+const FIREBASE_LIVE_STATION_PATH = (import.meta.env.VITE_FIREBASE_LIVE_STATION_PATH as string | undefined) ?? 'weather_station';
 const FIREBASE_READINGS_PATH = (import.meta.env.VITE_FIREBASE_READINGS_PATH as string | undefined) ?? 'readings';
 const FIREBASE_ALERTS_PATH = (import.meta.env.VITE_FIREBASE_ALERTS_PATH as string | undefined) ?? 'alerts';
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -245,6 +246,12 @@ function normalizeStatus(status: string | null): StationStatus {
   return 'online';
 }
 
+function normalizeStationId(value: unknown) {
+  const id = String(value ?? PRIMARY_STATION_ID).trim();
+  if (/^esp32[-_]?o?1$/i.test(id) || /^esp32[-_]?0?1$/i.test(id)) return PRIMARY_STATION_ID;
+  return id || PRIMARY_STATION_ID;
+}
+
 function mapReading(row: SupabaseReadingRow): Reading {
   const rainfall = Number(row.rainfall ?? 0);
   const windDirection = Number(row.wind_direction ?? row.wind_direction_pct ?? 0);
@@ -425,10 +432,10 @@ async function getFirestoreStations(): Promise<Station[]> {
     throw new Error('No Firestore readings found');
   }
 
-  const stationIds = Array.from(new Set(readings.map((reading) => reading.station_id ?? reading.stationId ?? PRIMARY_STATION_ID)));
+  const stationIds = Array.from(new Set(readings.map((reading) => normalizeStationId(reading.station_id ?? reading.stationId))));
   return stationIds.map((id, index) => {
     const fallback = sampleStations[index] ?? sampleStations[0];
-    const history = mapFirebaseReadings(readings.filter((reading) => reading.station_id === id || reading.stationId === id || (!reading.station_id && !reading.stationId && id === PRIMARY_STATION_ID)));
+    const history = mapFirebaseReadings(readings.filter((reading) => normalizeStationId(reading.station_id ?? reading.stationId) === id));
     const current = history[history.length - 1] ?? fallback.current;
 
     return {
@@ -452,7 +459,53 @@ async function getFirestoreStations(): Promise<Station[]> {
   });
 }
 
+function primaryStationFrom(history: Reading[], liveReading: FirebaseReading | null): Station {
+  const fallback = sampleStations[0];
+  const live = liveReading ? mapFirebaseReading({ station_id: PRIMARY_STATION_ID, ...liveReading }) : null;
+  const current = live ?? history[history.length - 1] ?? fallback.current;
+  const mergedHistory = history.length ? (live && live.timestamp !== history[history.length - 1]?.timestamp ? [...history, live] : history) : live ? [live] : fallback.history;
+
+  return {
+    id: PRIMARY_STATION_ID,
+    name: PRIMARY_STATION_NAME,
+    location: PRIMARY_STATION_LOCATION,
+    coordinates: PRIMARY_STATION_COORDINATES,
+    installationDate: fallback.installationDate,
+    status: 'online',
+    battery: fallback.battery,
+    signal: fallback.signal,
+    memory: fallback.memory,
+    communication: 'stable',
+    owner: fallback.owner,
+    lastCommunication: current.timestamp,
+    lastMaintenance: fallback.lastMaintenance,
+    lastUpload: current.timestamp,
+    current,
+    history: sortReadings(mergedHistory),
+  };
+}
+
+async function getFirebasePrimaryStation(): Promise<Station> {
+  const [readings, liveReading] = await Promise.all([
+    getFirestoreReadings().catch(() => []),
+    firebaseRequest<FirebaseReading>(FIREBASE_LIVE_STATION_PATH).catch(() => null),
+  ]);
+
+  const history = mapFirebaseReadings(readings.filter((reading) => normalizeStationId(reading.station_id ?? reading.stationId) === PRIMARY_STATION_ID));
+  if (!history.length && !liveReading) {
+    throw new Error('No Firebase ESP32 data found');
+  }
+
+  return primaryStationFrom(history, liveReading);
+}
+
 async function getFirebaseStations(): Promise<Station[]> {
+  try {
+    return [await getFirebasePrimaryStation()];
+  } catch {
+    // Continue to collection-shaped Firebase fallbacks below.
+  }
+
   try {
     return await getFirestoreStations();
   } catch {
@@ -469,7 +522,7 @@ async function getFirebaseStations(): Promise<Station[]> {
   }
 
   return stations.map((row) => {
-    const id = row.id ?? `station-${Date.now()}`;
+    const id = normalizeStationId(row.id);
     const fallback = fallbackStationDetails(id);
     const history = readingsForStation(id, row, readingPayload);
     const directReading = mapFirebaseReading(row);
@@ -480,9 +533,9 @@ async function getFirebaseStations(): Promise<Station[]> {
 
     return {
       id,
-      name: row.name ?? fallback.name,
-      location: row.location ?? fallback.location,
-      coordinates: row.coordinates ?? [latitude, longitude],
+      name: id === PRIMARY_STATION_ID ? PRIMARY_STATION_NAME : row.name ?? fallback.name,
+      location: id === PRIMARY_STATION_ID ? PRIMARY_STATION_LOCATION : row.location ?? fallback.location,
+      coordinates: id === PRIMARY_STATION_ID ? PRIMARY_STATION_COORDINATES : row.coordinates ?? [latitude, longitude],
       installationDate: row.installationDate ?? row.installedDate ?? row.installed_date ?? INSTALLATION_DATE,
       status,
       battery: numberFrom(row.battery, fallback.battery),
@@ -554,19 +607,26 @@ export async function getStations(): Promise<Station[]> {
 
 export async function getStationHistory(stationId: string, range: RangeKey) {
   const limit = range === '24h' ? 24 : range === '7d' ? 168 : 500;
+  const normalizedStationId = normalizeStationId(stationId);
   try {
-    const readings = await getFirestoreReadings();
-    const history = mapFirebaseReadings(readings.filter((reading) => reading.station_id === stationId || reading.stationId === stationId));
+    const [readings, liveReading] = await Promise.all([
+      getFirestoreReadings(),
+      normalizedStationId === PRIMARY_STATION_ID ? firebaseRequest<FirebaseReading>(FIREBASE_LIVE_STATION_PATH).catch(() => null) : Promise.resolve(null),
+    ]);
+    const history = primaryStationFrom(
+      mapFirebaseReadings(readings.filter((reading) => normalizeStationId(reading.station_id ?? reading.stationId) === normalizedStationId)),
+      liveReading,
+    ).history;
     if (history.length) return history.slice(-limit);
   } catch {
     // Continue to Realtime Database fallback below.
   }
 
   try {
-    const station = await firebaseRequest<FirebaseStation>(`${FIREBASE_STATIONS_PATH}/${stationId}`).catch(() => null);
-    const readings = await firebaseRequest<FirebaseObject | FirebaseReading[] | null>(`${FIREBASE_READINGS_PATH}/${stationId}`).catch(() => null);
+    const station = await firebaseRequest<FirebaseStation>(`${FIREBASE_STATIONS_PATH}/${normalizedStationId}`).catch(() => null);
+    const readings = await firebaseRequest<FirebaseObject | FirebaseReading[] | null>(`${FIREBASE_READINGS_PATH}/${normalizedStationId}`).catch(() => null);
     const stationReadings = readings as Record<string, FirebaseReading> | FirebaseReading[] | null;
-    const history = station ? readingsForStation(stationId, station, readings) : mapFirebaseReadings(recordValues(stationReadings));
+    const history = station ? readingsForStation(normalizedStationId, station, readings) : mapFirebaseReadings(recordValues(stationReadings));
     if (history.length) return history.slice(-limit);
   } catch {
     // Continue to Supabase/FastAPI/sample fallback below.
@@ -574,7 +634,7 @@ export async function getStationHistory(stationId: string, range: RangeKey) {
 
   try {
     const readings = await supabaseRequest<SupabaseReadingRow[]>(
-      `readings?select=*&station_id=eq.${stationId}&order=created_at.desc&limit=${limit}`,
+      `readings?select=*&station_id=eq.${normalizedStationId}&order=created_at.desc&limit=${limit}`,
     );
     return readings.reverse().map(mapReading);
   } catch {
@@ -582,9 +642,9 @@ export async function getStationHistory(stationId: string, range: RangeKey) {
   }
 
   try {
-    return await request<Station['history']>(`/stations/${stationId}/readings/history?range=${range}`);
+    return await request<Station['history']>(`/stations/${normalizedStationId}/readings/history?range=${range}`);
   } catch {
-    return sampleStations.find((station) => station.id === stationId)?.history ?? [];
+    return sampleStations.find((station) => station.id === normalizedStationId)?.history ?? [];
   }
 }
 
@@ -660,6 +720,6 @@ export async function getSystemAnalytics() {
 }
 
 export const polling = {
-  fast: Number(import.meta.env.VITE_FAST_POLL_MS ?? 30000),
+  fast: Number(import.meta.env.VITE_FAST_POLL_MS ?? 5000),
   slow: Number(import.meta.env.VITE_SLOW_POLL_MS ?? 300000),
 };
