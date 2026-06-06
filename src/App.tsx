@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BarChart3,
   CloudSun,
+  Clock,
   Compass,
   Database,
   Gauge,
@@ -210,7 +211,8 @@ function App() {
       ...reading,
       rainValue: reading.rain ? 1 : 0,
       lightValue: reading.light ? 1 : 0,
-      time: new Intl.DateTimeFormat('en-IN', { hour: '2-digit', minute: '2-digit' }).format(new Date(reading.timestamp)),
+      time: new Intl.DateTimeFormat('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(reading.timestamp)),
+      fullTime: formatDateTime(reading.timestamp),
     }));
   }, [activeStation, range]);
 
@@ -478,6 +480,7 @@ function Toolbar({ station, stations, onStationChange, role }: { station: Statio
 
 function modelReadingRows(reading: Station['current']) {
   return [
+    ['timestamp', formatDateTime(reading.timestamp)],
     ['altitude', reading.altitude],
     ['humidity', reading.humidity],
     ['light', String(reading.light)],
@@ -497,6 +500,7 @@ function Overview({ station, alerts, stations, role }: { station: Station; alert
   const reading = station.current;
   const visibleAlerts = visibleAlertsForRole(alerts, role);
   const cards = [
+    ['timestamp', formatDateTime(reading.timestamp), Clock, 'Firestore reading time'],
     ['altitude', reading.altitude, Compass, 'Model output'],
     ['humidity', reading.humidity, CloudSun, 'Model output'],
     ['light', String(reading.light), Sun, 'Model output'],
@@ -1148,7 +1152,7 @@ function ChartPanel({ title, data, dataKey, color, unit }: { title: string; data
             <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
             <XAxis dataKey="time" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(value) => [`${value} ${unit}`, title]} />
+            <Tooltip formatter={(value) => [`${value} ${unit}`, title]} labelFormatter={(_, payload) => payload?.[0]?.payload?.fullTime ?? ''} />
             <Area type="monotone" dataKey={dataKey} stroke={color} strokeWidth={3} fill={`url(#${dataKey}Gradient)`} />
           </AreaChart>
         </ResponsiveContainer>
@@ -1166,7 +1170,7 @@ function BarPanel({ title, data, dataKey, color, unit }: { title: string; data: 
             <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
             <XAxis dataKey="time" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(value) => [`${value} ${unit}`, title]} />
+            <Tooltip formatter={(value) => [`${value} ${unit}`, title]} labelFormatter={(_, payload) => payload?.[0]?.payload?.fullTime ?? ''} />
             <Bar dataKey={dataKey} fill={color} radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>

@@ -141,6 +141,11 @@ interface FirestoreDocument {
   updateTime?: string;
 }
 
+interface FirestoreListResponse {
+  documents?: FirestoreDocument[];
+  nextPageToken?: string;
+}
+
 async function request<T>(path: string): Promise<T> {
   if (!API_BASE_URL) {
     throw new Error('No API configured');
@@ -189,15 +194,20 @@ async function firebaseRequest<T>(path: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function firestoreRequest<T>(path: string): Promise<T> {
+async function firestoreRequest<T>(path: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
   const projectId = getFirebaseProjectId();
   if (!projectId) {
     throw new Error('No Firebase project configured');
   }
 
   const cleanPath = path.replace(/^\/|\/$/g, '');
-  const keyQuery = FIREBASE_API_KEY ? `?key=${encodeURIComponent(FIREBASE_API_KEY)}` : '';
-  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${cleanPath}${keyQuery}`);
+  const searchParams = new URLSearchParams();
+  if (FIREBASE_API_KEY) searchParams.set('key', FIREBASE_API_KEY);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined) searchParams.set(key, String(value));
+  });
+  const queryString = searchParams.toString() ? `?${searchParams.toString()}` : '';
+  const response = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${cleanPath}${queryString}`);
 
   if (!response.ok) {
     throw new Error(`Firestore request failed: ${response.status}`);
@@ -390,8 +400,19 @@ function normalizeCommunication(value: unknown, status: StationStatus): Station[
 }
 
 async function getFirestoreReadings(): Promise<FirebaseReading[]> {
-  const payload = await firestoreRequest<{ documents?: FirestoreDocument[] }>(FIREBASE_READINGS_PATH);
-  return (payload.documents ?? []).map(mapFirestoreDocument);
+  const documents: FirestoreDocument[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const payload = await firestoreRequest<FirestoreListResponse>(FIREBASE_READINGS_PATH, {
+      pageSize: 1000,
+      pageToken,
+    });
+    documents.push(...(payload.documents ?? []));
+    pageToken = payload.nextPageToken;
+  } while (pageToken);
+
+  return documents.map(mapFirestoreDocument);
 }
 
 async function getFirestoreStations(): Promise<Station[]> {
