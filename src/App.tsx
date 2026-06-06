@@ -6,6 +6,7 @@ import {
   BarChart3,
   CloudSun,
   Clock,
+  ClipboardList,
   Compass,
   Database,
   Gauge,
@@ -44,12 +45,13 @@ import { formatDateTime, getTrend, statusClass } from './utils/weather';
 import { stations as sampleStations, users as sampleUsers } from './data/sampleData';
 
 const navByRole: Record<Role, string[]> = {
-  User: ['Overview', 'Live Weather', 'Analytics', 'Forecast', 'Stations', 'Map', 'Station Details', 'Alerts', 'About'],
-  Operator: ['Overview', 'Live Weather', 'Analytics', 'Forecast', 'Stations', 'Map', 'Station Details', 'Alerts', 'Control', 'Health', 'Diagnostics', 'Maintenance', 'Users', 'Access', 'About'],
+  User: ['Overview', 'Live Weather', 'Analytics', 'Logs', 'Forecast', 'Stations', 'Map', 'Station Details', 'Alerts', 'About'],
+  Operator: ['Overview', 'Live Weather', 'Analytics', 'Logs', 'Forecast', 'Stations', 'Map', 'Station Details', 'Alerts', 'Control', 'Health', 'Diagnostics', 'Maintenance', 'Users', 'Access', 'About'],
   Admin: [
     'Overview',
     'Live Weather',
     'Analytics',
+    'Logs',
     'Forecast',
     'Stations',
     'Map',
@@ -71,6 +73,7 @@ const navIcons: Record<string, typeof Home> = {
   Overview: Home,
   'Live Weather': Activity,
   Analytics: BarChart3,
+  Logs: ClipboardList,
   Forecast: CloudSun,
   Stations: Radio,
   Map: MapIcon,
@@ -92,7 +95,7 @@ const demoCredentials = {
   password: 'LogixAir1',
 };
 
-const userStorageKey = 'weather-dashboard-users';
+const userStorageKey = 'weather-dashboard-users-v2';
 
 function loadStoredUsers() {
   try {
@@ -154,7 +157,7 @@ function App() {
   const [stations, setStations] = useState<Station[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [analytics, setAnalytics] = useState<Record<string, number | string>>({});
-  const [activeStationId, setActiveStationId] = useState('hyd-farm-01');
+  const [activeStationId, setActiveStationId] = useState('esp32-O1');
   const [manualRefreshKey, setManualRefreshKey] = useState(0);
   const [platformUsers, setPlatformUsers] = useState<PlatformUser[]>(loadStoredUsers);
 
@@ -270,6 +273,7 @@ function App() {
           {page === 'Overview' && <Overview station={activeStation} alerts={alerts} stations={stations} role={role} />}
           {page === 'Live Weather' && <LiveWeather station={activeStation} role={role} />}
           {page === 'Analytics' && <Analytics station={activeStation} chartData={chartData} range={range} setRange={setRange} />}
+          {page === 'Logs' && <LogsHistory station={activeStation} />}
           {page === 'Forecast' && <Forecast station={activeStation} />}
           {page === 'Stations' && <StationMonitoring stations={stations} activeStationId={activeStation.id} setActiveStationId={setActiveStationId} role={role} />}
           {page === 'Map' && <MapView stations={stations} setActiveStationId={setActiveStationId} role={role} />}
@@ -481,7 +485,6 @@ function Toolbar({ station, stations, onStationChange, role }: { station: Statio
 function modelReadingRows(reading: Station['current']) {
   return [
     ['timestamp', formatDateTime(reading.timestamp)],
-    ['altitude', reading.altitude],
     ['humidity', reading.humidity],
     ['light', String(reading.light)],
     ['pressure', reading.pressure],
@@ -501,7 +504,6 @@ function Overview({ station, alerts, stations, role }: { station: Station; alert
   const visibleAlerts = visibleAlertsForRole(alerts, role);
   const cards = [
     ['timestamp', formatDateTime(reading.timestamp), Clock, 'Firestore reading time'],
-    ['altitude', reading.altitude, Compass, 'Model output'],
     ['humidity', reading.humidity, CloudSun, 'Model output'],
     ['light', String(reading.light), Sun, 'Model output'],
     ['pressure', reading.pressure, Gauge, 'Model output'],
@@ -586,7 +588,6 @@ function Analytics({ chartData, range, setRange }: { station: Station; chartData
         ))}
       </div>
       <div className="grid gap-5 xl:grid-cols-2">
-        <ChartPanel title="Altitude Trend" data={chartData} dataKey="altitude" color="#475569" unit="" />
         <ChartPanel title="Temperature Trend" data={chartData} dataKey="temperature" color="#0b79b7" unit="°C" />
         <ChartPanel title="Humidity Trend" data={chartData} dataKey="humidity" color="#1fb879" unit="%" />
         <ChartPanel title="Pressure Trend" data={chartData} dataKey="pressure" color="#64748b" unit="" />
@@ -595,6 +596,50 @@ function Analytics({ chartData, range, setRange }: { station: Station; chartData
         <ChartPanel title="Wind Direction %" data={chartData} dataKey="windDirectionPct" color="#14b8a6" unit="" />
       </div>
     </div>
+  );
+}
+
+function LogsHistory({ station }: { station: Station }) {
+  const rows = station.history.slice().reverse();
+
+  return (
+    <Panel title="Received Data Logs">
+      <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        <Summary label="Station" value={station.name} />
+        <Summary label="Log entries" value={rows.length} />
+        <Summary label="Latest received" value={formatDateTime(station.lastUpload)} />
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[920px] text-left text-sm">
+          <thead className="text-slate-500 dark:text-slate-400">
+            <tr>
+              <th className="py-3 pr-4">Timestamp</th>
+              <th className="py-3 pr-4">Temperature</th>
+              <th className="py-3 pr-4">Humidity</th>
+              <th className="py-3 pr-4">Pressure</th>
+              <th className="py-3 pr-4">Rain</th>
+              <th className="py-3 pr-4">Light</th>
+              <th className="py-3 pr-4">Wind direction</th>
+              <th className="py-3 pr-4">Wind direction %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((reading) => (
+              <tr key={`${reading.timestamp}-${reading.temperature}-${reading.pressure}`} className="border-t border-slate-200 dark:border-slate-800">
+                <td className="py-3 pr-4 font-semibold">{formatDateTime(reading.timestamp)}</td>
+                <td className="py-3 pr-4">{reading.temperature}</td>
+                <td className="py-3 pr-4">{reading.humidity}</td>
+                <td className="py-3 pr-4">{reading.pressure}</td>
+                <td className="py-3 pr-4">{String(reading.rain)}</td>
+                <td className="py-3 pr-4">{String(reading.light)}</td>
+                <td className="py-3 pr-4">{reading.windDirectionLabel}</td>
+                <td className="py-3 pr-4">{reading.windDirectionPct}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Panel>
   );
 }
 
@@ -665,7 +710,7 @@ function StationMonitoring({ stations, activeStationId, setActiveStationId, role
 }
 
 function MapView({ stations, setActiveStationId, role }: { stations: Station[]; setActiveStationId: (id: string) => void; role: Role }) {
-  const center: [number, number] = stations[0]?.coordinates ?? [17.385, 78.4867];
+  const center: [number, number] = stations[0]?.coordinates ?? [12.8948249, 77.6761678];
 
   return (
     <Panel title="Interactive Station Map">
@@ -839,7 +884,7 @@ function UserManagement({ users, setUsers }: { users: PlatformUser[]; setUsers: 
   const [selectedUserId, setSelectedUserId] = useState(users[0]?.id ?? '');
   const [mode, setMode] = useState<'add' | 'assign' | null>(null);
   const [notice, setNotice] = useState('Select a user, then choose an action.');
-  const [newUser, setNewUser] = useState({ name: '', username: '', email: '', password: '', role: 'User' as Role, stationAccess: 'hyd-farm-01' });
+  const [newUser, setNewUser] = useState({ name: '', username: '', email: '', password: '', role: 'User' as Role, stationAccess: 'esp32-O1' });
   const [roleDraft, setRoleDraft] = useState<Role>('User');
   const selectedUser = users.find((user) => user.id === selectedUserId);
 
@@ -871,7 +916,7 @@ function UserManagement({ users, setUsers }: { users: PlatformUser[]; setUsers: 
     };
     setUsers((items) => [...items, user]);
     setSelectedUserId(user.id);
-    setNewUser({ name: '', username: '', email: '', password: '', role: 'User', stationAccess: 'hyd-farm-01' });
+    setNewUser({ name: '', username: '', email: '', password: '', role: 'User', stationAccess: 'esp32-O1' });
     setMode(null);
     setNotice(`${user.name} was added. Username: ${user.username}`);
   };
@@ -1002,7 +1047,7 @@ function StationAdmin({ stations }: { stations: Station[] }) {
       battery: 100,
       signal: 88,
       memory: 22,
-      coordinates: [17.385, 78.4867],
+      coordinates: [12.8948249, 77.6761678],
       lastCommunication: new Date().toISOString(),
       lastUpload: new Date().toISOString(),
       installationDate: '2026-06-05',
@@ -1322,8 +1367,8 @@ function Footer() {
           <p className="mt-6 text-sm">Copyright 2026 Team 3. All rights reserved.</p>
         </div>
         <div className="text-sm font-semibold leading-7">
-          <p>Hyderabad, India</p>
-          <p>Enschede, Netherlands</p>
+          <p>Amrita College, Bengaluru</p>
+          <p>ESP32-O1 Weather Station</p>
         </div>
         <div className="border-white/70 md:border-l md:pl-5">
           {['Technology', 'Company', 'Careers', 'Contact us'].map((item) => <p key={item} className="text-lg leading-8">{item}</p>)}

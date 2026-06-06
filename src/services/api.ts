@@ -13,6 +13,10 @@ const FIREBASE_ALERTS_PATH = (import.meta.env.VITE_FIREBASE_ALERTS_PATH as strin
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 const INSTALLATION_DATE = '2026-06-05';
+const PRIMARY_STATION_ID = 'esp32-O1';
+const PRIMARY_STATION_NAME = 'ESP32-O1 Weather Station';
+const PRIMARY_STATION_LOCATION = 'Amrita College, Bengaluru';
+const PRIMARY_STATION_COORDINATES: [number, number] = [12.8948249, 77.6761678];
 
 interface SupabaseStationRow {
   id: string;
@@ -421,17 +425,17 @@ async function getFirestoreStations(): Promise<Station[]> {
     throw new Error('No Firestore readings found');
   }
 
-  const stationIds = Array.from(new Set(readings.map((reading) => reading.station_id ?? reading.stationId ?? 'esp32-O1')));
+  const stationIds = Array.from(new Set(readings.map((reading) => reading.station_id ?? reading.stationId ?? PRIMARY_STATION_ID)));
   return stationIds.map((id, index) => {
     const fallback = sampleStations[index] ?? sampleStations[0];
-    const history = mapFirebaseReadings(readings.filter((reading) => reading.station_id === id || reading.stationId === id || (!reading.station_id && !reading.stationId && id === 'esp32-O1')));
+    const history = mapFirebaseReadings(readings.filter((reading) => reading.station_id === id || reading.stationId === id || (!reading.station_id && !reading.stationId && id === PRIMARY_STATION_ID)));
     const current = history[history.length - 1] ?? fallback.current;
 
     return {
       id,
-      name: id,
-      location: fallback.location,
-      coordinates: fallback.coordinates,
+      name: id === PRIMARY_STATION_ID ? PRIMARY_STATION_NAME : id,
+      location: PRIMARY_STATION_LOCATION,
+      coordinates: PRIMARY_STATION_COORDINATES,
       installationDate: fallback.installationDate,
       status: 'online',
       battery: fallback.battery,
